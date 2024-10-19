@@ -172,6 +172,7 @@ to setup-shield-gate
 
   ;; Initialize the shield gate status
   set shield-gate-status shield-gate-operational-status
+  ;;print shield-gate-status
 
   ;; Set initial health based on status
   if shield-gate-status = "Fully Operational" [
@@ -231,6 +232,7 @@ end
 to setup-rebels
   ;; Create Rebel ground troops based on control factors
   create-rebels rebel-ground-troop-numbers [
+    set breed rebels
     set color orange
     set shape "person"
     setxy random-xcor (min-pycor + 5)
@@ -369,9 +371,9 @@ to go
     set label (word "Health: " health " Shield: " rebels-shield)
   ]
 
-  plotxy time ifelse-value (count rebels with [breed = ships] > 0)
-  [mean [health] of rebels with [breed = ships]]
-  [0]
+  ;;plotxy time ifelse-value (count rebels with [breed = ships] > 0)
+  ;;[mean [health] of rebels with [breed = ships]]
+  ;;[0]
 
   tick
 end
@@ -383,13 +385,11 @@ end
 ;; Modify rebels-act to include attempt to disable shield gate
 to rebels-act
   ask rebels [
-    if member? self ships [
-      rebel-ship-actions
-      attempt-attack-shield-gate
-    ]
     if member? self rebels [
       rebel-ground-actions
-      attempt-attack-shield-gate
+      rebel-ship-actions
+      ;;attempt-attack-shield-gate
+      ;;print "Rebel - Attack Gate Shield"
     ]
   ]
   ;; Rebels attempt to attack the shield gate
@@ -403,6 +403,7 @@ to attempt-attack-shield-gate
     ;; Check if the ship is near the shield gate
     if distancexy 0 (max-pycor - 2) < 10 [
       fire-at-shield-gate  ;; Fire at the shield gate
+      print "Ship - Attack Gate Shield"
     ]
   ]
   ;;print "attempt-attack-shield-gate -- ask rebels"
@@ -418,7 +419,7 @@ to fire-at-shield-gate
     set target-is-shield-gate? true              ;; indicates the projectile targets the shield gate
     set projectile-damage 20                     ;; assign damage value (adjust as needed)
     set lifetime 15           ;; visible for 15 ticks
-    ;; print "fire-at-shield-gate -- hatch-projectiles"
+    print "fire-at-shield-gate -- hatch-projectiles"
   ]
   print "fire-at-shield-gate"
 end
@@ -567,7 +568,7 @@ to fire-at [target]
     set heading towards target
     set target-agent target
     set projectile-damage damage
-    set target-is-shield-gate? false  ;; initalize to false
+    ;;set target-is-shield-gate? false  ;; initalize to false
     set lifetime 15       ;; visible for 15 ticks
   ]
   ;; debugging statement
@@ -584,63 +585,27 @@ to move-projectiles
       die
     ]
 
-    ;; Check if the projectile targets the shield gate
-    ifelse target-is-shield-gate? [
-      ;; Check if it has reached the shield gate
-      if distancexy 0 (max-pycor - 2) < 1 [
-        ;; Inflict damage on the shield gate
-        reduce-shield-gate-health projectile-damage
-        die   ;; Projectile disappears after hitting
-      ]
-    ] [ ;; else condition
-      ;; Existing code for projectiles targeting agents
-      if target-agent != nobody [
-        if distance target-agent < 1 [
-          ;; Inflict damage considering armor and shields
-          ask target-agent [
-            set health health - [projectile-damage] of myself
-            if health <= 0 [
-              die
-            ]
-            ;;let damage [projectile-damage] of myself
-            ;; apply shield first
-            ;; ++ if shield > 0 [
-            ;; ++   ;;let shield-damage min (damage) shield
-            ;; ++   set shield shield - shield-damage
-            ;; ++   set damage damage - shield-damage
-            ;; ++ ] ;; -- closure if sheild > 0
-            ;; Apply armor
-            ;; ++ let effective-damage damage * (1 - (armor / 100))
-            ;; ++ set health health - effective-damage
-            ;; ++ if health <= 0 [
-            ;; ++   die   ;; target-agent dies
-            ;; ++ ]
-          ] ;; -- closure - ask target-agent
-          if target-agent = nobody [
+    if target-agent != nobody [
+      if distance target-agent < 1 [
+        ;; Inflict damage considering armor and shields
+        ask target-agent [
+          set health health - [projectile-damage] of myself
+          if health <= 0 [
             die
           ]
+
+        ] ;; -- closure - ask target-agent
+        if target-agent = nobody [
+          die
         ]
       ]
     ]
+    ;;]
     if not can-move? 1 [
       die
     ]
   ]
 end
-        ;;die
-      ;;die
-    ;; Existing code for projectiles targeting agents
-    ;; if target-agent != nobody [
-    ;;     if distance target-agent < 1 [
-    ;;       ;; Inflict damage on the target agent
-    ;;       ask target-agent [
-    ;;         set health health - [projectile-damage] of myself
-    ;;         if health <= 0 [
-    ;;           die   ;; Target agent dies
-    ;;         ]
-    ;;       ]
-    ;;       die   ;; Projectile disappears after hitting
-    ;;     ]
 
 ;; to recharge-shields
 ;;   ask turtles with [shield < shield-max] [
@@ -774,8 +739,8 @@ end
 GRAPHICS-WINDOW
 592
 -28
-1389
-770
+1079
+460
 -1
 -1
 15.471
@@ -788,10 +753,10 @@ GRAPHICS-WINDOW
 1
 1
 1
--25
-25
--25
-25
+-15
+15
+-15
+15
 1
 1
 1
@@ -841,7 +806,7 @@ CHOOSER
 rebel-spacecraft-types
 rebel-spacecraft-types
 "Fighters Only" "Bombers Only" "Mixed Fleet" "Includes Capital Ships"
-3
+2
 
 CHOOSER
 11
@@ -963,10 +928,10 @@ NIL
 1
 
 MONITOR
-373
-13
-487
-58
+372
+15
+499
+60
 Shield Gate Health
 shield-gate-health
 3
@@ -1011,7 +976,7 @@ rebel-spacecraft-deployment
 rebel-spacecraft-deployment
 0
 100
-10.0
+2.0
 1
 1
 NIL
@@ -1026,7 +991,7 @@ initial-lifetime
 initial-lifetime
 0
 20
-5.0
+3.0
 1
 1
 NIL
@@ -1055,10 +1020,10 @@ ifelse-value (count rebels with [breed = ships] > 0)\n  [mean [energy] of rebels
 11
 
 PLOT
-31
-668
-473
-825
+512
+497
+954
+654
 Relationships (Ships/Rebels/Imperials)
 NIL
 NIL
@@ -1432,7 +1397,7 @@ NetLogo 6.4.0
             org.jhotdraw.contrib.ChopDiamondConnector REF 3
         org.nlogo.sdm.gui.StockFigure "attributes" "attributes" 1 "FillColor" "Color" 225 225 182 492 144 60 40
             org.nlogo.sdm.gui.WrappedStock "" "" 0
-        org.nlogo.sdm.gui.RateConnection 3 262 183 371 164 480 164 NULL NULL 0 0 0
+        org.nlogo.sdm.gui.RateConnection 3 262 185 371 173 480 166 NULL NULL 0 0 0
             org.jhotdraw.standard.ChopBoxConnector REF 5
             org.jhotdraw.standard.ChopBoxConnector REF 10
             org.nlogo.sdm.gui.WrappedRate "" "" REF 6 REF 11 0
