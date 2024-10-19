@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<!DOCTYPE search SYSTEM "behaviorsearch.dtd">
+<search>
+    <bsearchVersionNumber>1.10</bsearchVersionNumber>
+    <modelInfo>
+        <modelFile>D:\DASEclass_2024\Team_D@$3 $T@T$\DASE_BattleForScarif-Behaviors.nlogo</modelFile>
+        <modelSetupCommands>setup</modelSetupCommands>
+        <modelStepCommands>go</modelStepCommands>
+        <modelStopCondition>count turtles &gt; 1000</modelStopCondition>
+        <modelStepLimit>100</modelStepLimit>
+        <modelMetricReporter>mean [rebel-spacecraft-numbers] of turtles</modelMetricReporter>
+        <modelMeasureIf>true</modelMeasureIf>
+    </modelInfo>
+    <fitnessInfo>
+        <fitnessMinimized>false</fitnessMinimized>
+        <fitnessCollecting>AT_FINAL_STEP</fitnessCollecting>
+        <fitnessSamplingReplications>10</fitnessSamplingReplications>
+        <fitnessCombineReplications>MEAN</fitnessCombineReplications>
+    </fitnessInfo>
+    <searchSpace>
+        <paramSpec>["rebel-ground-troop-numbers" [2 1 200]]</paramSpec>
+        <paramSpec>["shield-gate-operational-status" "Fully Operational" "Reduced Efficiency" "Vulnerable"]</paramSpec>
+        <paramSpec>["rebel-tactical-strategies" "Stealth Infiltration" "Full Frontal Assault" "Diversionary Tactics"]</paramSpec>
+        <paramSpec>["rebel-spacecraft-types" "Fighters Only" "Bombers Only" "Mixed Fleet" "Includes Capital Ships"]</paramSpec>
+        <paramSpec>["rebel-ground-force-composition" "Infantry Only" "Infantry + Specialists" "Mixed Units"]</paramSpec>
+        <paramSpec>["rebel-spacecraft-numbers" [4 1 300]]</paramSpec>
+        <paramSpec>["imperial-troop-deployment" [2 1 300]]</paramSpec>
+        <paramSpec>["imperial-spacecraft-deployment" [2 1 60]]</paramSpec>
+        <paramSpec>["timing-of-ground-and-space-assaults" [0 1 60]]</paramSpec>
+        <paramSpec>["reinforcements-arrival-time" [10 1 45]]</paramSpec>
+        <paramSpec>["rebel-spacecraft-deployment" [0 1 100]]</paramSpec>
+        <paramSpec>["initial-lifetime" [0 1 20]]</paramSpec>
+    </searchSpace>
+    <searchMethod type="StandardGA">
+        <searchMethodParameter name="mutation-rate" value="0.03"/>
+        <searchMethodParameter name="population-size" value="50"/>
+        <searchMethodParameter name="crossover-rate" value="0.7"/>
+        <searchMethodParameter name="population-model" value="generational"/>
+        <searchMethodParameter name="tournament-size" value="3"/>
+    </searchMethod>
+    <chromosomeRepresentation type="GrayBinaryChromosome"/>
+    <caching>true</caching>
+    <evaluationLimit>300</evaluationLimit>
+    <bestCheckingNumReplications>0</bestCheckingNumReplications>
+</search>
