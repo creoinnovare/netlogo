@@ -7,14 +7,16 @@ turtles-own [
   role
   health
   ship-type
+  energy
 ]
 
-agents-own [
-  risk-aversion       ; R, fixed for the agent's lifetime, ranging from 0-1 (inclusive)
-  perceived-hardship  ; H, also ranging from 0-1 (inclusive)
-  active?             ; if true, then the agent is actively rebelling
-  jail-term           ; how many turns in jail remain? (if 0, the agent is not in jail)
-]
+;;agents-own [
+;;  risk-aversion       ; R, fixed for the agent's lifetime, ranging from 0-1 (inclusive)
+;;  perceived-hardship  ; H, also ranging from 0-1 (inclusive)
+;;  active?             ; if true, then the agent is actively rebelling
+;;  jail-term           ; how many turns in jail remain? (if 0, the agent is not in jail)
+;;  energy
+;;]
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Global Variables and Setup
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -26,9 +28,14 @@ globals [
   time                        ;; Simulation time
   battle-over?                ;; Flag to end simulation
   shield-gate-status          ;; Status of the Shield Gate
+  shield-gate-health          ;; Health of the shield gate / resilence (impact)
+  failure-probability         ;; Likelihood of system failure (likelihood)
+  environmental-risk          ;; Risk factor based on weather and conditions
+  weather-conditions          ;; Current weather condition (affects likelihood)
 
-  weather                     ;; Current weather condition
-  target-agent
+  shield-gate                 ;; shield-gate global
+  shield-gate-damage          ;; shield gate damage global
+
   equipment-failure-alpha     ;; Alpha parameter for Beta prior
   equipment-failure-beta      ;; Beta parameter for Beta prior
 ]
@@ -43,20 +50,47 @@ breed [ships ship]
 breed [troopers trooper]  ;; Not used in this version but can be expanded
 breed [projectiles projectile]
 
+projectiles-own [
+  target-agent            ;; the agent the projectile is targeting
+  projectile-damage       ;; the amount of damage this projectile will inflict
+  target-is-shield-gate?  ;; indicates if the projectile target the shield gate
+  lifetime                ;; number of ticks projectile will be alive
+]
+
 rebels-own [
   role          ;; Role of the rebel (e.g., infantry, specialist)
   health        ;; Health status
+  rebels-armor                 ;; resiliency variable
+  rebels-shield                 ;; resiliency variable
+  rebels-shield-max             ;; resiliency variable
+  rebels-shield-recharge-rate   ;; resiliency variable
+  rebel-shield-damage
   ship-type     ;; Type of ship (for ships)
+  energy
 ]
 
 imperials-own [
   role          ;; Role of the imperial (e.g., trooper)
   health        ;; Health status
+  imperials-armor                 ;; resiliency variable
+  imperials-shield                 ;; resiliency variable
+  imperials-shield-max             ;; resiliency variable
+  imperials-shield-recharge-rate   ;; resiliency variable
+  imperials-shield-damage
   ship-type     ;; Type of ship (for ships)
+  energy
 ]
 
 ships-own [
+  role
+  health
+  armor                 ;; resiliency variable
+  shield                 ;; resiliency variable
+  shield-max             ;; resiliency variable
+  shield-recharge-rate   ;; resiliency variable
+  shield-damage
   ship-type     ;; Type of ship (e.g., fighter, bomber)
+  energy
 ]
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Control Factors (Adjustable via Interface)
@@ -65,6 +99,7 @@ ships-own [
 ;; The following variables should be set up as sliders and choosers in the NetLogo Interface:
 
 ;; Sliders:
+;; initial-lifetime (Range: 0 to 20)
 ;; rebel-ground-troop-numbers (Range: 50 to 200)
 ;; rebel-spacecraft-numbers (Range: 10 to 50)
 ;; imperial-troop-deployment (Range: 100 to 300)
@@ -78,12 +113,22 @@ ships-own [
 ;; rebel-tactical-strategies (Options: "Stealth Infiltration", "Full Frontal Assault", "Diversionary Tactics")
 ;; shield-gate-operational-status (Options: "Fully Operational", "Reduced Efficiency", "Vulnerable")
 
+;; Monitors:
+;; shield-gate-health
+;; shield-gate-status
+;; time                    ;; internal timer / event based monitoring
+
+;; Plots:
+;; shield-gate-health
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Setup Procedures
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 to setup
   clear-all
+  ;; system dynamic modeler setup
+  system-dynamics-setup
 
   set equipment-failure-alpha 3      ;; Prior successes (failures + 1)
   set equipment-failure-beta 19      ;; Prior failures (non-failures + 1)  equipment-failure-alpha     ;; Alpha parameter for Beta prior
@@ -96,12 +141,13 @@ to setup
   setup-environment
   set time 0
   set battle-over? false
-  set weather one-of ["Clear" "Overcast" "Rainy" "Foggy" "Stormy"]
+  set weather-conditions one-of ["Clear" "Overcast" "Rainy" "Foggy" "Stormy"]
   setup-shield-gate
   setup-imperials
   setup-rebels
 
   reset-ticks
+  ;; print "setup complete"
 end
 
 to setup-environment
@@ -113,55 +159,127 @@ to setup-environment
   ]
 end
 
+to update-environmental-risk
+  if weather-conditions = "Clear" [ set environmental-risk 0.1 ]
+  if weather-conditions = "Overcast" [ set environmental-risk 0.3 ]
+  if weather-conditions = "Rainy" [ set environmental-risk 0.5 ]
+  if weather-conditions = "Foggy" [ set environmental-risk 0.6 ]
+  if weather-conditions = "Stormy" [ set environmental-risk 0.8 ]
+
+  ;; update failure probabliltiy dynamically based upon environmental risk
+  set failure-probability failure-probability + (environmental-risk / 10)
+end
+
 ;; Define the setup-shield-gate procedure
 to setup-shield-gate
-  ;; Initialize the shield gate status
-  set shield-gate-status shield-gate-operational-status
-
+  set failure-probability 0.1  ;; initial failure probablilty
   ;; Create the shield gate turtle
   create-turtles 1 [
+    set breed ships
     set shield-gate? true
     set color cyan
     set shape "circle"
-    set size 5
-    setxy 0 (max-pycor - 2)
-    set heading 180
+    set size 7
+    setxy 0 (max-pycor - 15)
+    set heading 90
     set label "Shield Gate"
-    set label-color black
-    hide-turtle  ;; Hide if you don't want it visible
+    set label-color white
+    set ship-type "shield-gate"
+
+    set shield-gate self      ;; assign turtle to global variable
   ]
+
+  ;; Initialize the shield gate status
+  set shield-gate-status shield-gate-operational-status ;; monitor variable
+  ;;print shield-gate-status
+
+  ;; Set initial health based on status
+  if shield-gate-status = "Fully Operational" [
+    set shield-gate-health 100
+  ]
+  if shield-gate-status = "Reduced Efficiency" [
+    set shield-gate-health 70
+  ]
+  if shield-gate-status = "Vulnerable" [
+    set shield-gate-health 40
+  ]
+
+  update-shield-gate-appearance
+  ;; Display health as part of the label
+  update-shield-gate-label
+
 end
+
 
 to setup-imperials
   ;; Create Imperial ground troops
   create-imperials imperial-troop-deployment [
-    set color gray + 2
+    set color black
     set shape "person"
     setxy random-xcor (max-pycor - 5)
     set role "trooper"
     set health 100
+    set imperials-armor 5                    ;; resiliency variable
+    set imperials-shield 30                  ;; resiliency variable
+    set imperials-shield-max 30              ;; resiliency variable
+    set imperials-shield-recharge-rate .5    ;; resiliency variable
+    ;;set shield-gate? false ;; initialize to false
+
+    set energy 100
   ]
 
   ;; Create Imperial ships
   create-ships imperial-spacecraft-deployment [
     set breed imperials
-    set color gray
+    set color black
     set shape "airplane"
     setxy random-xcor (max-pycor + 5)
     set heading 180
     set ship-type "tie-fighter"
     set health 100
+    set imperials-armor 20                    ;; resiliency variable
+    set imperials-shield 100                  ;; resiliency variable
+    set imperials-shield-max 100              ;; resiliency variable
+    set imperials-shield-recharge-rate 2      ;; resiliency variable
+
+    ;;set shield-gate? false  ;; initialize to false
   ]
+  ;; print "setup-imperials"
 end
 
 to setup-rebels
   ;; Create Rebel ground troops based on control factors
   create-rebels rebel-ground-troop-numbers [
-    set color red
+    set breed rebels
+    set color orange
     set shape "person"
     setxy random-xcor (min-pycor + 5)
     assign-rebel-role
     set health 100
+    set rebels-armor 10                 ;; resiliency variable
+    set rebels-shield 50                 ;; resiliency variable
+    set rebels-shield-max 50             ;; resiliency variable
+    set rebels-shield-recharge-rate 1    ;; resiliency variable
+    ;;set shield-gate? false  ;; initialize to false
+
+    set energy 100
+  ]
+
+  ;; Create Rebel ships (if any)
+  create-ships rebel-spacecraft-deployment [
+    set breed rebels
+    set color blue
+    set shape "airplane"
+    setxy random-xcor (min-pycor - 5)
+    set heading 180 ;; random 360
+    set ship-type "x-wing"
+    set health 100
+    set rebels-armor 20                    ;; resiliency variable
+    set rebels-shield 100                  ;; resiliency variable
+    set rebels-shield-max 100              ;; resiliency variable
+    set rebels-shield-recharge-rate 2      ;; resiliency variable
+
+    ;;set shield-gate? false  ;; intialize to false
   ]
 
   ;; Schedule space assault based on timing
@@ -169,10 +287,11 @@ to setup-rebels
     setup-rebel-ships
   ]
   if timing-of-ground-and-space-assaults > 0 [
+    setup-rebel-ships
     ;;schedule [ setup-rebel-ships ] timing-of-ground-and-space-assaults
   ]
+  ;; print "setup-imperials"
 end
-
 
 to assign-rebel-role
   ;; Assign roles based on Rebel Ground Force Composition
@@ -197,6 +316,10 @@ to setup-rebel-ships
     set heading 0
     assign-rebel-ship-type
     set health 100
+    set rebels-armor 20                    ;; resiliency variable
+    set rebels-shield 100                  ;; resiliency variable
+    set rebels-shield-max 100              ;; resiliency variable
+    set rebels-shield-recharge-rate 2      ;; resiliency variable
   ]
 end
 
@@ -216,27 +339,64 @@ to assign-rebel-ship-type
   ]
 end
 
+to consume-energy [amount]
+  set energy energy - amount
+  if energy < 0 [ set energy 0 ]  ;; Ensure energy doesn't go negative
+end
+
+to regenerate-energy [amount]
+  set energy energy + amount
+  if energy > 100 [ set energy 100 ]  ;; Cap energy at 100
+end
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Main Simulation Loop
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 to go
+  ;; scratch code - using dynamic modeler
+  system-dynamics-go
+  set-current-plot "battle-population"
+  system-dynamics-do-plot
+
   if battle-over? [ stop ]
 
   set time time + 1
 
+  ;; Plot the current shield gate health
+  ;;plotxy time shield-gate-health
+
   ;; Handle reinforcements
   if time = reinforcements-arrival-time [
     call-reinforcements
+    ;;show time
   ]
+
+  ;; Regenerate energy for all agents
+  ;;ask turtles [
+  ;;  regenerate-energy 1  ;; Each agent regenerates 1 energy per tick
+  ;;]
 
   ;; Agents perform actions
   rebels-act
   imperials-act
   move-projectiles
+  ;; recharge-shields
 
   ;; Check for battle end conditions
   check-battle-over
+
+  ;;ask projectiles [
+  ;;  let opacity 255 * (lifetime / initial-lifetime)
+  ;;  set color lput opacity extract-rgb color
+  ;;]
+  ask rebels with [breed = ships] [
+    set label (word "Health: " health " Shield: " rebels-shield)
+  ]
+
+  ;;plotxy time ifelse-value (count rebels with [breed = ships] > 0)
+  ;;[mean [health] of rebels with [breed = ships]]
+  ;;[0]
 
   tick
 end
@@ -248,16 +408,32 @@ end
 ;; Modify rebels-act to include attempt to disable shield gate
 to rebels-act
   ask rebels [
-    ifelse member? self ships [
+    if member? self rebels [
+      rebel-ground-actions
       rebel-ship-actions
+      attempt-attack-shield-gate
+      ;;print "Rebel - Attack Gate Shield"
     ]
-    [ rebel-ground-actions ]  ;;
-    ]
-  ;;]
-  ;; Rebels attempt to disable the shield gate
+  ]
+  ;; Rebels attempt to attack the shield gate
   if shield-gate-status != "Destroyed" [
     attempt-disable-shield-gate
   ]
+end
+
+to attempt-attack-shield-gate
+  ask rebels with [breed = ships] [
+    ;; Check if the ship is near the shield gate
+    ;;if distancexy 0 (max-pycor - 2) < 10 [
+    ;;fire-at-shield-gate ;; Fire at the shield gate
+    ;;  print "Ship - Attack Gate Shield"
+    ;;]
+    ;;let target one-of enemy-breed in-cone 5 60
+    ;;if target != nobody [
+    fire-at-shield-gate
+    ;;]
+  ]
+  ;;print "attempt-attack-shield-gate -- ask rebels"
 end
 
 to attempt-disable-shield-gate
@@ -269,11 +445,17 @@ to attempt-disable-shield-gate
         user-message "Rebels have disabled the Shield Gate!"
       ]
       ;;else [
-        ;; Unsuccessful attempt; perhaps decrement shield gate's health
-      ;;]
+      ;;user-message "Unsuccessful attempt"  ;; perhaps decrement shield gate's health
+
     ]
   ]
 end
+
+;;to update-shield-gate-label
+;;  ask turtles with [shield-gate?] [
+;;    set label (word "Shield Gate (" shield-gate-status ", Health: " shield-gate-health ")")
+;;  ]
+;;end
 
 to rebel-ground-actions
   ;; Implement movement and combat based on tactical strategies
@@ -292,9 +474,12 @@ to rebel-ground-actions
 end
 
 to rebel-ship-actions
+  if energy > 0 [
+    consume-energy 5  ;; consumes 5 energy per action
   ;; Ships move and engage in space combat
   fly-forward
   engage-combat imperials
+  ]
 end
 
 to imperials-act
@@ -303,9 +488,6 @@ to imperials-act
       imperial-ship-actions
     ]
     [ imperial-ground-actions ]
-    ;;else [
-    ;;  imperial-ground-actions
-    ;;]
   ]
 end
 
@@ -317,11 +499,24 @@ to imperial-ground-actions
 end
 
 to imperial-ship-actions
+  if energy > 0 [
+   consume-energy 5   ;; consumes 5 energy per action
   ;; Imperial ships patrol and engage
   fly-forward
   engage-combat rebels
+  ]
 end
 
+to rebel-ship-attack
+  ask turtles with [color = blue] [
+    ifelse random-float 1 < failure-probability [
+      print "Attack failed due to environmental risk"
+    ] [
+      print "Attack succeeded"
+      reduce-shield-gate-health 3
+    ]
+  ]
+end
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Movement and Combat Procedures
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -365,31 +560,174 @@ to engage-combat [enemy-breed]
   ]
 end
 
+
+to fire-at-shield-gate
+  let damage 2
+  if [ship-type] of self = "capital" [
+    set shield-gate-damage shield-gate-damage + 2
+    print "Capital Ship Damage"
+    print shield-gate-damage
+    reduce-shield-gate-health shield-gate-damage
+    ;;update-shield-gate-label
+    ;;update-shield-gate-appearance
+  ]
+
+    ;; create a projectile targeting the shield gate
+    hatch-projectiles 1 [
+      set color red
+      set size 0.5
+      set shape "circle"
+      set heading towardsxy 0 (max-pycor - 2)
+      set target-is-shield-gate? true              ;; indicates the projectile targets the shield gate
+      set projectile-damage 20                     ;; assign damage value (adjust as needed)
+      set lifetime 15           ;; visible for 15 ticks
+      print "fire-at-shield-gate -- hatch-projectiles"
+    ]
+
+  print "fire-at-shield-gate"
+end
+
 to fire-at [target]
+  ;; Determine damage based on agent type or weapon
+  let damage 2
+  ;;if [ship-type] of self = "capital" [
+  ;;  set shield-gate-damage shield-gate-damage + 2
+  ;;  print "Capital Ship Damage"
+  ;;  print shield-gate-damage
+  ;;  reduce-shield-gate-health shield-gate-damage
+    ;;update-shield-gate-label
+    ;;update-shield-gate-appearance
+  ;;]
+  ;; Assume melee attack damage is 10
+  ;; let damage 10
+  ask target [
+   ;; Apply shield and armor as before
+  ;;    if shield >= 0 [
+      ;;let shield-damage min (damage) shield
+       ;; set shield shield - shield-damage
+       ;; set damage damage - shield-damage
+     ;; ] ;; -- if shield >= 0
+     ;;let effective-damage damage * (1 - (armor / 100))
+     ;;set health health - effective-damage
+     ;;if health <= 0 [
+     ;;  die
+     ;;]
+   ]  ;; -- ask target
+
   ;; Create a projectile towards the target
   hatch-projectiles 1 [
     set color yellow
-    set size 0.5
+    set size .25
     set shape "circle"
     set heading towards target
     set target-agent target
+    set projectile-damage damage
+    ;;set target-is-shield-gate? false  ;; initalize to false
+    set lifetime 15       ;; visible for 15 ticks
   ]
+  ;; debugging statement
+  ;; print (word "Project created by " self " targeting " target)
 end
 
 to move-projectiles
   ask projectiles [
     fd 3
-    if distance target-agent < 1 [
-      ;; Inflict damage
-      ask target-agent [
-        set health health - 20
-        if health <= 0 [ die ]
-      ]
-      die  ;; Projectile disappears
+    ;; Decrease lifetime by 1
+    set lifetime lifetime - 1
+    ;; check if lifetime has expired
+    if lifetime <= 0 [
+      die
     ]
-    ;; Remove projectile if it goes off-screen
+
+    if target-agent != nobody [
+      if distance target-agent < 1 [
+        ;; Inflict damage considering armor and shields
+        ask target-agent [
+          set health health - [projectile-damage] of myself
+          if health <= 0 [
+            die
+          ]
+
+        ] ;; -- closure - ask target-agent
+        if target-agent = nobody [
+          die
+        ]
+      ]
+    ]
+    ;;]
     if not can-move? 1 [
       die
+    ]
+  ]
+end
+
+;; to recharge-shields
+;;   ask turtles with [shield < shield-max] [
+;;     set shield shield + shield-recharge-rate
+;;     if shield > shield-max [
+;;       set shield shield-max
+;;     ]
+;;   ]
+;; end
+
+to reduce-shield-gate-health [damage]
+  ;; Reduce shield gate health
+  let adjusted-damage damage * (1 - environmental-risk)
+
+  set shield-gate-health shield-gate-health - adjusted-damage
+
+  if shield-gate-health < 10 [ set shield-gate-health 0 ]
+
+  ;; Determine new status based on health
+  let new-status shield-gate-status
+  if shield-gate-health = 0 [
+    set new-status "Destroyed"
+  ]
+  if shield-gate-health > 0 and shield-gate-health <= 40 [
+    set new-status "Vulnerable"
+  ]
+  if shield-gate-health > 40 and shield-gate-health <= 70 [
+    set new-status "Reduced Efficiency"
+  ]
+  if shield-gate-health > 70 [
+    set new-status "Fully Operational"
+  ]
+
+  ;; Update status only if it changed
+  if new-status != shield-gate-status [
+    set shield-gate-status new-status
+    update-shield-gate-appearance
+    ;;user-message (word "Shield Gate status changed to: " new-status)
+  ]
+
+  ;; Update shield gate label
+  update-shield-gate-appearance
+  update-shield-gate-label
+
+end
+
+to update-shield-gate-label
+  ;; Update the label with the current health  [color = red] [
+  ask turtles with [breed = ships] [
+    set label (word "Shield Gate (Health: " shield-gate-health ")")
+  ]
+end
+
+to update-shield-gate-appearance
+  ;; Change the appearance based on the current status
+  ask turtles with [breed = ships] [
+    print "shield-gate = true"
+    if shield-gate-status = "Fully Operational" [
+      set color cyan
+    ]
+    if shield-gate-status = "Reduced Efficiency" [
+      set color yellow
+    ]
+    if shield-gate-status = "Vulnerable" [
+      set color red
+    ]
+    if shield-gate-status = "Destroyed" [
+      set color black
     ]
   ]
 end
@@ -401,15 +739,23 @@ end
 to call-reinforcements
   ;; Bring in Imperial reinforcements
   create-imperials imperial-troop-deployment [
-    set color gray + 2
+    set color violet ;; + 2
     set shape "person"
     setxy random-xcor (max-pycor - 5)
     set role "trooper"
     set health 100
   ]
+  ;;print "call-reinforcements - create-imperials"
 
-  ;; Optionally, bring in Rebel reinforcements
-  ;; create-rebels rebel-ground-troop-numbers [...]
+  ;; Bring in Rebel reinforcements
+  create-rebels rebel-ground-troop-numbers [
+    set color red ;; + 2
+    set shape "person"
+    setxy random-xcor (max-pycor - 5)
+    set role "rebel"
+    set health 100
+  ]
+  ;;print "call-reinforcements - create-rebels"
 end
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -451,15 +797,15 @@ to schedule [task time-offset]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
-613
-52
-1199
-639
--1
--1
-17.52
-1
+616
 10
+1103
+498
+-1
+-1
+15.471
+1
+15
 1
 1
 1
@@ -467,10 +813,10 @@ GRAPHICS-WINDOW
 1
 1
 1
--16
-16
--16
-16
+-15
+15
+-15
+15
 1
 1
 1
@@ -478,110 +824,110 @@ ticks
 30.0
 
 SLIDER
-173
-144
-414
-177
+12
+122
+253
+155
 rebel-ground-troop-numbers
 rebel-ground-troop-numbers
-10
+2
 200
-10.0
+2.0
 1
 1
 NIL
 HORIZONTAL
 
 CHOOSER
-169
-636
-386
-681
+14
+10
+231
+55
 shield-gate-operational-status
 shield-gate-operational-status
 "Fully Operational" "Reduced Efficiency" "Vulnerable"
 0
 
 CHOOSER
-169
-581
-343
-626
+16
+313
+190
+358
 rebel-tactical-strategies
 rebel-tactical-strategies
 "Stealth Infiltration" "Full Frontal Assault" "Diversionary Tactics"
 2
 
 CHOOSER
-168
-526
-352
-571
+15
+258
+199
+303
 rebel-spacecraft-types
 rebel-spacecraft-types
 "Fighters Only" "Bombers Only" "Mixed Fleet" "Includes Capital Ships"
 3
 
 CHOOSER
-164
-475
-396
-520
+11
+207
+243
+252
 rebel-ground-force-composition
 rebel-ground-force-composition
 "Infantry Only" "Infantry + Specialists" "Mixed Units"
 2
 
 SLIDER
-172
-186
-390
-219
+11
+164
+229
+197
 rebel-spacecraft-numbers
 rebel-spacecraft-numbers
-10
+4
 300
-10.0
+8.0
 1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-173
-232
-397
-265
+267
+212
+491
+245
 imperial-troop-deployment
 imperial-troop-deployment
-10
+2
 300
-10.0
+2.0
 1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-170
-280
-424
-313
+266
+251
+520
+284
 imperial-spacecraft-deployment
 imperial-spacecraft-deployment
-20
+2
 60
-20.0
+2.0
 1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-168
-331
-463
-364
+267
+159
+514
+192
 timing-of-ground-and-space-assaults
 timing-of-ground-and-space-assaults
 0
@@ -593,15 +939,15 @@ NIL
 HORIZONTAL
 
 SLIDER
-168
-380
-395
-413
+267
+122
+494
+155
 reinforcements-arrival-time
 reinforcements-arrival-time
 10
 45
-30.0
+10.0
 1
 1
 NIL
@@ -640,6 +986,170 @@ NIL
 NIL
 NIL
 1
+
+MONITOR
+372
+15
+499
+60
+Shield Gate Health
+shield-gate-health
+3
+1
+11
+
+MONITOR
+373
+66
+496
+111
+Shield Gate Status
+shield-gate-status
+3
+1
+11
+
+PLOT
+27
+444
+470
+653
+shield-gate-health
+ticks
+shield-gate-health
+0.0
+100.0
+0.0
+100.0
+true
+true
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot count turtles"
+
+SLIDER
+18
+376
+242
+409
+rebel-spacecraft-deployment
+rebel-spacecraft-deployment
+0
+100
+4.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+237
+10
+352
+43
+initial-lifetime
+initial-lifetime
+0
+20
+0.0
+1
+1
+NIL
+HORIZONTAL
+
+MONITOR
+513
+12
+570
+57
+Time
+time
+3
+1
+11
+
+MONITOR
+386
+359
+580
+404
+Average Energy - Rebel Ships
+ifelse-value (count rebels with [breed = ships] > 0)\n  [mean [energy] of rebels with [breed = ships]]\n  [0]
+3
+1
+11
+
+PLOT
+501
+536
+943
+693
+Relationships (Ships/Rebels/Imperials)
+NIL
+NIL
+0.0
+100.0
+0.0
+25.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot count ships"
+"Number of Rebels" 1.0 2 -7500403 true "" "plot count rebels"
+"Number of Imperials" 1.0 0 -2674135 true "" "plot count imperials"
+
+PLOT
+973
+537
+1323
+693
+battle-population
+NIL
+NIL
+0.0
+100.0
+0.0
+100.0
+true
+true
+"" ""
+PENS
+"rebel-wolfs" 1.0 2 -2674135 true "" "plot count turtles"
+"rebel-sheep" 1.0 2 -13345367 true "" "plot count turtles"
+
+MONITOR
+270
+300
+352
+345
+Rebel Sheep
+rebel-sheep
+3
+1
+11
+
+MONITOR
+368
+301
+447
+346
+Rebel Wolfs
+rebel-wolfs
+3
+1
+11
+
+MONITOR
+536
+95
+594
+140
+Damage
+shield-gate-damage
+3
+1
+11
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -986,6 +1496,74 @@ Polygon -7500403 true true 30 75 75 30 270 225 225 270
 NetLogo 6.4.0
 @#$#@#$#@
 @#$#@#$#@
+0.01
+    org.nlogo.sdm.gui.AggregateDrawing 24
+        org.nlogo.sdm.gui.StockFigure "attributes" "attributes" 1 "FillColor" "Color" 225 225 182 273 116 60 40
+            org.nlogo.sdm.gui.WrappedStock "rebel-sheep" "100" 0
+        org.nlogo.sdm.gui.ConverterFigure "attributes" "attributes" 1 "FillColor" "Color" 130 188 183 24 228 50 50
+            org.nlogo.sdm.gui.WrappedConverter ".04" "rebel-birth-rate"
+        org.nlogo.sdm.gui.ReservoirFigure "attributes" "attributes" 1 "FillColor" "Color" 192 192 192 108 139 30 30
+        org.nlogo.sdm.gui.RateConnection 3 138 154 199 147 261 140 NULL NULL 0 0 0
+            org.jhotdraw.figures.ChopEllipseConnector REF 5
+            org.jhotdraw.standard.ChopBoxConnector REF 1
+            org.nlogo.sdm.gui.WrappedRate "rebel-birth-rate * rebel-sheep" "rebel-births"
+                org.nlogo.sdm.gui.WrappedReservoir  REF 2 0
+        org.nlogo.sdm.gui.BindingConnection 2 63 242 199 147 NULL NULL 0 0 0
+            org.jhotdraw.contrib.ChopDiamondConnector REF 3
+            org.nlogo.sdm.gui.ChopRateConnector REF 6
+        org.nlogo.sdm.gui.StockFigure "attributes" "attributes" 1 "FillColor" "Color" 225 225 182 258 315 60 40
+            org.nlogo.sdm.gui.WrappedStock "rebel-wolfs" "30" 0
+        org.nlogo.sdm.gui.RateConnection 3 330 335 391 336 453 337 NULL NULL 0 0 0
+            org.jhotdraw.standard.ChopBoxConnector REF 14
+            org.jhotdraw.figures.ChopEllipseConnector
+                org.nlogo.sdm.gui.ReservoirFigure "attributes" "attributes" 1 "FillColor" "Color" 192 192 192 452 322 30 30
+            org.nlogo.sdm.gui.WrappedRate "rebel-wolfs * wolf-death-rate" "wolfs-deaths" REF 15
+                org.nlogo.sdm.gui.WrappedReservoir  0   REF 19
+        org.nlogo.sdm.gui.ConverterFigure "attributes" "attributes" 1 "FillColor" "Color" 130 188 183 285 439 50 50
+            org.nlogo.sdm.gui.WrappedConverter ".15" "wolf-death-rate"
+        org.nlogo.sdm.gui.BindingConnection 2 319 448 391 336 NULL NULL 0 0 0
+            org.jhotdraw.contrib.ChopDiamondConnector REF 22
+            org.nlogo.sdm.gui.ChopRateConnector REF 16
+        org.nlogo.sdm.gui.BindingConnection 2 330 335 391 336 NULL NULL 0 0 0
+            org.jhotdraw.standard.ChopBoxConnector REF 14
+            org.nlogo.sdm.gui.ChopRateConnector REF 16
+        org.nlogo.sdm.gui.ConverterFigure "attributes" "attributes" 1 "FillColor" "Color" 130 188 183 68 474 50 50
+            org.nlogo.sdm.gui.WrappedConverter ".8" "predator-efficiency"
+        org.nlogo.sdm.gui.ReservoirFigure "attributes" "attributes" 1 "FillColor" "Color" 192 192 192 150 310 30 30
+        org.nlogo.sdm.gui.RateConnection 3 180 327 213 330 246 332 NULL NULL 0 0 0
+            org.jhotdraw.figures.ChopEllipseConnector REF 32
+            org.jhotdraw.standard.ChopBoxConnector REF 14
+            org.nlogo.sdm.gui.WrappedRate "rebel-wolfs * predator-efficiency * predation-rate * rebel-sheep" "wolf-births"
+                org.nlogo.sdm.gui.WrappedReservoir  REF 15 0
+        org.nlogo.sdm.gui.BindingConnection 2 103 484 213 330 NULL NULL 0 0 0
+            org.jhotdraw.contrib.ChopDiamondConnector REF 30
+            org.nlogo.sdm.gui.ChopRateConnector REF 33
+        org.nlogo.sdm.gui.ConverterFigure "attributes" "attributes" 1 "FillColor" "Color" 130 188 183 256 221 50 50
+            org.nlogo.sdm.gui.WrappedConverter "3.0E-4" "predation-rate"
+        org.nlogo.sdm.gui.BindingConnection 2 269 259 213 330 NULL NULL 0 0 0
+            org.jhotdraw.contrib.ChopDiamondConnector REF 41
+            org.nlogo.sdm.gui.ChopRateConnector REF 33
+        org.nlogo.sdm.gui.BindingConnection 2 246 331 213 330 NULL NULL 0 0 0
+            org.jhotdraw.standard.ChopBoxConnector REF 14
+            org.nlogo.sdm.gui.ChopRateConnector REF 33
+        org.nlogo.sdm.gui.BindingConnection 2 288 168 213 330 NULL NULL 0 0 0
+            org.jhotdraw.standard.ChopBoxConnector REF 1
+            org.nlogo.sdm.gui.ChopRateConnector REF 33
+        org.nlogo.sdm.gui.RateConnection 3 345 138 405 141 466 145 NULL NULL 0 0 0
+            org.jhotdraw.standard.ChopBoxConnector REF 1
+            org.jhotdraw.figures.ChopEllipseConnector
+                org.nlogo.sdm.gui.ReservoirFigure "attributes" "attributes" 1 "FillColor" "Color" 192 192 192 465 130 30 30
+            org.nlogo.sdm.gui.WrappedRate "rebel-sheep * predation-rate * rebel-wolfs" "sheep-deaths" REF 2
+                org.nlogo.sdm.gui.WrappedReservoir  0   REF 55
+        org.nlogo.sdm.gui.BindingConnection 2 294 234 405 141 NULL NULL 0 0 0
+            org.jhotdraw.contrib.ChopDiamondConnector REF 41
+            org.nlogo.sdm.gui.ChopRateConnector REF 52
+        org.nlogo.sdm.gui.BindingConnection 2 345 138 405 141 NULL NULL 0 0 0
+            org.jhotdraw.standard.ChopBoxConnector REF 1
+            org.nlogo.sdm.gui.ChopRateConnector REF 52
+        org.nlogo.sdm.gui.BindingConnection 2 307 303 405 141 NULL NULL 0 0 0
+            org.jhotdraw.standard.ChopBoxConnector REF 14
+            org.nlogo.sdm.gui.ChopRateConnector REF 52
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
